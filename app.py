@@ -1,4 +1,4 @@
-# app.py - FIXED FOR PILLOW 10+
+# app.py - PRODUCTION READY WITH CORS FIX
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -15,14 +15,28 @@ os.environ['REQUESTS_CA_BUNDLE'] = ''
 os.environ['CURL_CA_BUNDLE'] = ''
 
 app = Flask(__name__)
-CORS(app)
+
+# ⚡ CORS FIX: Allow your production domain!
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://www.editorn.com",
+            "https://editorn.com",
+            "http://localhost:3000",
+            "http://localhost:5000"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True
+    }
+})
 
 # Get port from environment (Railway provides this)
 PORT = int(os.environ.get('PORT', 5000))
 
-# ⚡ SPEED OPTIMIZATION 1: Pre-load model (saves 2-3 seconds per request!)
+# ⚡ SPEED OPTIMIZATION: Pre-load model
 print("🚀 Loading AI model... (this takes 10 seconds, but only happens once!)")
-session = new_session("u2net")  # Pre-load model into memory
+session = new_session("u2net")
 print("✅ Model loaded! API is ready for FAST processing!")
 
 @app.route('/', methods=['GET'])
@@ -41,8 +55,12 @@ def home():
 def health_check():
     return jsonify({'status': 'healthy', 'model_loaded': True})
 
-@app.route('/remove-background', methods=['POST'])
+@app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background():
+    # Handle OPTIONS request (CORS preflight)
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+    
     try:
         print("⚡ Received request!")
         
@@ -57,14 +75,13 @@ def remove_background():
         original_size = input_image.size
         print(f"📏 Original size: {original_size}")
         
-        # ⚡ SPEED OPTIMIZATION 2: Resize large images (saves 2-5 seconds!)
-        max_size = 1024  # Process at max 1024px
+        # Resize large images for speed
+        max_size = 1024
         if max(original_size) > max_size:
             ratio = max_size / max(original_size)
             new_size = tuple(int(dim * ratio) for dim in original_size)
-            # FIXED: Use Image.Resampling.LANCZOS for Pillow 10+
             input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
-            print(f"⚡ Resized to: {new_size} for faster processing")
+            print(f"⚡ Resized to: {new_size}")
         
         # Convert RGBA to RGB if needed
         if input_image.mode == 'RGBA':
@@ -74,12 +91,11 @@ def remove_background():
         
         print("🤖 Removing background with AI...")
         
-        # ⚡ SPEED OPTIMIZATION 3: Use pre-loaded session (MUCH faster!)
+        # Remove background
         output_image = remove(input_image, session=session)
         
         # Resize back to original size
         if max(original_size) > max_size:
-            # FIXED: Use Image.Resampling.LANCZOS for Pillow 10+
             output_image = output_image.resize(original_size, Image.Resampling.LANCZOS)
             print(f"📏 Resized back to: {original_size}")
         
@@ -87,29 +103,40 @@ def remove_background():
         
         # Convert to base64
         img_io = io.BytesIO()
-        
-        # ⚡ SPEED OPTIMIZATION 4: PNG compression (saves 1-2 seconds!)
         output_image.save(img_io, 'PNG', optimize=False, compress_level=1)
         img_io.seek(0)
         img_base64 = base64.b64encode(img_io.getvalue()).decode('utf-8')
         
         print("🎉 Sending response")
-        return jsonify({
+        
+        response = jsonify({
             'success': True,
             'output': f'data:image/png;base64,{img_base64}'
         })
+        
+        # Add CORS headers to response
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        
+        return response
     
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        
+        error_response = jsonify({'success': False, 'error': str(e)})
+        error_response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        
+        return error_response, 500
 
 if __name__ == '__main__':
     print("\n" + "="*60)
     print("🚀 Background Removal API - PRODUCTION MODE")
     print("="*60)
     print("✅ Model pre-loaded (FAST mode enabled!)")
+    print("✅ CORS configured for www.editorn.com")
     print("✅ Image resizing enabled (max 1024px)")
     print("✅ Optimized PNG compression")
     print("🔥 Expected speed: 1-3 seconds per image!")
