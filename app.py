@@ -1,5 +1,6 @@
 # app_working.py - TRULY WORKING VERSION
 # This version 100% applies backgrounds correctly
+# CORS FIXED - Memory optimized
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -9,6 +10,7 @@ import io
 import base64
 import ssl
 import os
+import gc  # ✅ ADDED: Garbage collection for memory management
 
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['REQUESTS_CA_BUNDLE'] = ''
@@ -16,27 +18,43 @@ os.environ['CURL_CA_BUNDLE'] = ''
 
 app = Flask(__name__)
 
+# ✅ FIXED: Simplified CORS configuration
+ALLOWED_ORIGINS = [
+    "https://www.editorn.com",
+    "https://editorn.com",
+    "http://localhost:3000",
+    "http://localhost:5000"
+]
+
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "https://www.editorn.com",
-            "https://editorn.com",
-            "http://localhost:3000",
-            "http://localhost:5000"
-        ],
+        "origins": ALLOWED_ORIGINS,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type"],
         "supports_credentials": True
     }
 })
 
+# ✅ ADDED: Proper origin echo in response headers
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    # Only allow whitelisted origins
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
+
 PORT = int(os.environ.get('PORT', 5000))
 
 print("🚀 Loading AI models...")
+# ✅ OPTIMIZED: Load fewer models to reduce Railway memory usage
 MODELS = {
     'general': new_session("u2net"),
-    'person': new_session("u2net_human_seg"),
-    'product': new_session("isnet-general-use"),
+    # 'person': new_session("u2net_human_seg"),  # Commented out to save memory
+    # 'product': new_session("isnet-general-use"),  # Commented out to save memory
     'fast': new_session("u2netp"),
 }
 print("✅ Models loaded!")
@@ -46,21 +64,24 @@ def home():
     return jsonify({
         'service': 'Background Removal API - Working',
         'status': 'running',
-        'version': '3.0.0'
+        'version': '3.0.1',
+        'cors_fixed': True,
+        'allowed_origins': ALLOWED_ORIGINS
     })
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy', 'models_loaded': list(MODELS.keys())})
+    return jsonify({
+        'status': 'healthy', 
+        'models_loaded': list(MODELS.keys()),
+        'allowed_origins': ALLOWED_ORIGINS
+    })
 
 @app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background():
+    # ✅ FIXED: Simplified OPTIONS handling (headers handled by @app.after_request)
     if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        return response, 200
+        return '', 204
     
     try:
         # Get parameters
@@ -72,7 +93,7 @@ def remove_background():
         gradient_end = request.form.get('gradientEnd', '#764BA2')
         
         print("\n" + "="*70)
-        print(f"📥 NEW REQUEST")
+        print(f"📥 NEW REQUEST from {request.headers.get('Origin')}")  # ✅ ADDED: Show origin
         print(f"   Model: {model_type}")
         print(f"   BG Type: {bg_type}")
         print(f"   BG Color: {bg_color}")
@@ -81,7 +102,7 @@ def remove_background():
         print("="*70)
         
         if 'image' not in request.files:
-            return create_error_response('No image provided', 400)
+            return jsonify({'success': False, 'error': 'No image provided'}), 400
         
         file = request.files['image']
         input_image = Image.open(file.stream)
@@ -89,8 +110,8 @@ def remove_background():
         
         print(f"📏 Image size: {original_size}")
         
-        # Resize if needed
-        max_dimension = 2048
+        # ✅ OPTIMIZED: Reduced max dimension to prevent Railway OOM
+        max_dimension = 1024  # Reduced from 2048 to save memory
         processing_image = input_image.copy()
         
         if max(original_size) > max_dimension:
@@ -122,6 +143,10 @@ def remove_background():
         
         print(f"✅ Background removed! Mode: {removed_bg.mode}")
         
+        # ✅ ADDED: Clean up to save memory
+        del processing_image
+        gc.collect()
+        
         # Resize back
         if max(original_size) > max_dimension:
             removed_bg = removed_bg.resize(original_size, Image.Resampling.LANCZOS)
@@ -150,6 +175,10 @@ def remove_background():
             final_image = apply_shadow(final_image, removed_bg)
             print(f"   ✅ Shadow applied! Final mode: {final_image.mode}")
         
+        # ✅ ADDED: Clean up to save memory
+        del removed_bg
+        gc.collect()
+        
         # Save and encode
         img_io = io.BytesIO()
         
@@ -171,28 +200,37 @@ def remove_background():
         print(f"   BG type returned: {bg_type}")
         print("="*70 + "\n")
         
-        response = jsonify({
+        # ✅ ADDED: Clean up to save memory
+        del final_image
+        gc.collect()
+        
+        # ✅ FIXED: Let @app.after_request handle CORS headers
+        return jsonify({
             'success': True,
             'output': f'data:image/png;base64,{img_base64}',
             'dimensions': {
-                'width': final_image.size[0],
-                'height': final_image.size[1]
+                'width': original_size[0],
+                'height': original_size[1]
             },
             'bgType': bg_type,  # IMPORTANT: Tell frontend what background was applied
             'hasBackground': bg_type != 'transparent'
         })
-        
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        
-        return response
+    
+    # ✅ ADDED: Better error handling for memory issues
+    except MemoryError:
+        print(f"❌ OUT OF MEMORY!")
+        gc.collect()
+        return jsonify({
+            'success': False, 
+            'error': 'Image too large. Please try a smaller image or use the "fast" model.'
+        }), 413
     
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         import traceback
         traceback.print_exc()
-        return create_error_response(str(e), 500)
+        gc.collect()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 def apply_solid_background(foreground_rgba, color_hex):
     """Apply solid color background - GUARANTEED TO WORK"""
@@ -308,19 +346,14 @@ def apply_shadow(background_image, foreground_rgba):
         print(f"      ✗ Shadow failed: {e}")
         return background_image
 
-def create_error_response(message, status_code):
-    error_response = jsonify({'success': False, 'error': message})
-    error_response.headers.add('Access-Control-Allow-Origin', '*')
-    error_response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-    error_response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    return error_response, status_code
-
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🚀 Background Removal API - WORKING v3.0")
+    print("🚀 Background Removal API v3.0.1 - CORS FIXED")
     print("="*70)
     print("✅ Backgrounds GUARANTEED to work")
-    print("✅ All features tested and verified")
+    print("✅ CORS properly configured")
+    print(f"✅ Allowed origins: {', '.join(ALLOWED_ORIGINS)}")
+    print("✅ Memory optimized for Railway (max 1024px)")
     print("="*70 + "\n")
     print(f"🌐 API running on http://0.0.0.0:{PORT}\n")
     
